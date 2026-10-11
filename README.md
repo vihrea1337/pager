@@ -6,6 +6,10 @@ A mod (function-hooks plugin) for Claude Code. No server, no Bun, no extra flags
 
 [Русская версия](README.ru.md)
 
+<p align="center">
+  <img src="docs/img/02-prompt.jpg" width="320" alt="A prompt texted from the phone, the bot's confirmation, and the finished answer back in Telegram">
+</p>
+
 ## What it does
 
 - ✅ **Done** — when a turn that took longer than *N* seconds ends, the paired chat gets the project folder, how long it took and Claude's answer (long answers are cut at a word, `/last` sends the whole one).
@@ -21,6 +25,23 @@ A mod (function-hooks plugin) for Claude Code. No server, no Bun, no extra flags
 
 All 49 unit tests pass. I fixed the cache: the museum's API sent `Vary: *`…
 ```
+
+## Bot commands
+
+| | |
+|---|---|
+| any text | queued into the session as your own prompt |
+| `/status` | idle, or what Claude is working on and for how long |
+| `/last` | the last answer in full |
+| `/stop` | stop the running task |
+| `/help` | the list above |
+
+The bot's **Menu** button lists them too — Pager fills it in on start and on pairing.
+
+<p align="center">
+  <img src="docs/img/03-commands.jpg" width="300" alt="/status while idle, /last repeating the whole answer, /stop with nothing running">
+  <img src="docs/img/04-status-stop.jpg" width="300" alt="A prompt from Telegram, /status showing the running task, /stop ending it">
+</p>
 
 ## Install
 
@@ -39,11 +60,15 @@ Answer `y` to add the marketplace, pick the user scope, and paste your bot token
 
 From then on the bot listens to that chat only; messages from anyone else are dropped silently.
 
+<p align="center">
+  <img src="docs/img/01-help.jpg" width="300" alt="/start in the paired chat: the help message, then a test Done from /pager test">
+</p>
+
 ## Settings (`/config` → pager)
 
 | Setting | Default | |
 |---|---|---|
-| Notify after (seconds) | 30 | Quick answers you watched yourself don't buzz your phone. Turns started from Telegram are always reported. |
+| Notify after (seconds) | 0 | Every turn is reported. Raise it and quick answers you watched yourself stop buzzing your phone; turns started from Telegram are always reported. |
 | Notify when waiting | on | The "waiting for permission / input" message |
 | Accept prompts from Telegram | on | Off = notifications only |
 | Desktop notification too | off | Also a system notification on this computer |
