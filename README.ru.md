@@ -7,7 +7,7 @@
 [English version](README.md)
 
 <p align="center">
-  <img src="docs/img/02-prompt.jpg" width="320" alt="Запрос с телефона, подтверждение бота и готовый ответ обратно в Telegram">
+  <img src="docs/img/01-chat.png" width="320" alt="Запрос с телефона и готовый ответ обратно в Telegram">
 </p>
 
 ## Что умеет
@@ -33,8 +33,8 @@
 Кнопка **Меню** в чате показывает то же самое — Pager заполняет её при старте и при привязке.
 
 <p align="center">
-  <img src="docs/img/03-commands.jpg" width="300" alt="/status без задачи, /last с полным ответом, /stop когда ничего не выполняется">
-  <img src="docs/img/04-status-stop.jpg" width="300" alt="Запрос из Telegram, /status с идущей задачей, /stop её останавливает">
+  <img src="docs/img/02-commands.png" width="300" alt="/status без задачи, /last с полным ответом, /stop когда ничего не выполняется">
+  <img src="docs/img/03-status-stop.png" width="300" alt="Запрос из Telegram, /status с идущей задачей, /stop её останавливает">
 </p>
 
 ## Установка
@@ -54,9 +54,6 @@
 
 Дальше бот слушает только этот чат, сообщения от остальных молча отбрасываются.
 
-<p align="center">
-  <img src="docs/img/01-help.jpg" width="300" alt="/start в привязанном чате: справка и пробное «Готово» от /pager test">
-</p>
 
 ## Настройки (`/config` → pager)
 
