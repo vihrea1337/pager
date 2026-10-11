@@ -1,6 +1,6 @@
 {
   "name": "pager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Pager: Claude Code pings you in Telegram when a task is done or it waits for your permission, and you text back the next prompt, /status, /last or /stop from your phone",
   "author": {
     "name": "vihrea1337",

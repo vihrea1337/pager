@@ -253,7 +253,10 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
       return 'pager: paired — notifications go to that chat, and only it can send prompts.'
     }
     case 'unpair':
-      await $.store.set('chatId', undefined)
+      // `delete`, not `set(key, undefined)`: the store takes JSON data, and
+      // `undefined` is not — the set rejected, the command answered nothing, and
+      // the engine said "no command.run hook answered it" (found live 2026-10-11).
+      await $.store.delete('chatId')
       return 'pager: unpaired. Text the bot again to pair a chat.'
     case 'test': {
       const chatId = await pairedChat($)
@@ -281,7 +284,7 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
 async function releaseLease($: EngineInterface, ctx: Ctx): Promise<void> {
   try {
     const lease = (await $.store.get('lease')) as Lease | undefined
-    if (lease?.sessionId === ctx.sessionId) await $.store.set('lease', undefined)
+    if (lease?.sessionId === ctx.sessionId) await $.store.delete('lease')
   } catch {}
 }
 
@@ -393,5 +396,14 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e)) // a pager that failed must never swallow the engine's own notification
 
-  on('command.run', { command: 'pager' }, async ($, e) => ({ text: await pagerCommand($, ctx, e.args) }))
+  // Always answers, even when something inside throws: an unanswered command.run
+  // leaves the person with the engine's "no hook answered it", which says nothing
+  // about what went wrong.
+  on('command.run', { command: 'pager' }, async ($, e) => {
+    try {
+      return { text: await pagerCommand($, ctx, e.args) }
+    } catch (err) {
+      return { text: `pager: ${String(err).slice(0, 300)}` }
+    }
+  })
 }

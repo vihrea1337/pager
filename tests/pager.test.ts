@@ -112,13 +112,22 @@ function fakeWorld(on: On, updates: TgUpdate[] = []) {
   const sent: Sent[] = []
   const submitted: string[] = []
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
-  on('store.set', ($, e) => (store.set(e.key, e.value), { value: undefined }))
+  // As strict as the real store: it takes JSON data, so `undefined` is refused.
+  // Without this the fake accepted `set(key, undefined)` and the tests missed that
+  // /pager unpair threw against the engine (fixed 0.3.1).
+  on('store.set', ($, e) => {
+    if (e.value === undefined) throw new Error('store.set: value must be JSON data')
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('store.delete', ($, e) => (store.delete(e.key), { value: undefined }))
   on('session.id', () => ({ value: 'S1' }))
   on('clock.now', () => ({ value: 1_000_000 }))
   on('clock.every', () => ({ value: undefined }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('ui.toast', () => ({ value: undefined }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.end', () => ({ sessionId: 'S1' }))
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('prompt.submit', ($, e) => (submitted.push(e.text), { text: e.text }))
@@ -190,6 +199,22 @@ test('a turn a background task started is reported, without a misleading duratio
   const done = world.sent.find(s => s.method === 'sendMessage')
   expect(done?.body.text).toContain('after a background task')
   expect(done?.body.text).toContain('The timer finished.')
+})
+
+test('/pager unpair forgets the chat and says so', { options: { botToken: TOKEN } }, async ($, on) => {
+  const world = fakeWorld(on)
+  await $.session.start({ cwd: 'C:/Projects/galleria', surface: null, isInteractive: false })
+  const answer = await $.command.run(run('unpair'))
+  expect(answer.text).toContain('unpaired')
+  expect(world.store.has('chatId')).toBe(false)
+})
+
+test('a session hands the polling lease back when it ends', { options: { botToken: TOKEN } }, async ($, on) => {
+  const world = fakeWorld(on)
+  world.store.set('lease', { sessionId: 'S1', until: 2_000_000 })
+  await $.session.start({ cwd: 'C:/Projects/galleria', surface: null, isInteractive: false })
+  await $.session.end({ reason: 'other', sessionId: 'S1', resume: { id: 'S1' } })
+  expect(world.store.has('lease')).toBe(false)
 })
 
 test('pairing sets the bot menu', async ($, on) => {
