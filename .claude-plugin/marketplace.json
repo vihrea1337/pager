@@ -1,0 +1,17 @@
+{
+  "name": "pager",
+  "metadata": {
+    "description": "Pager: Claude Code pings you in Telegram when a task is done, and you text back the next prompt."
+  },
+  "owner": {
+    "name": "vihrea1337",
+    "url": "https://github.com/vihrea1337"
+  },
+  "plugins": [
+    {
+      "name": "pager",
+      "source": "./",
+      "description": "Telegram for Claude Code: 'done' and 'waiting for permission' messages with the answer, and the next prompt, /status, /last and /stop from your phone."
+    }
+  ]
+}

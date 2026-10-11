@@ -1,0 +1,53 @@
+{
+  "name": "pager",
+  "version": "0.1.0",
+  "description": "Pager: Claude Code pings you in Telegram when a task is done or it waits for your permission, and you text back the next prompt, /status, /last or /stop from your phone",
+  "author": {
+    "name": "vihrea1337",
+    "url": "https://github.com/vihrea1337"
+  },
+  "homepage": "https://github.com/vihrea1337/pager",
+  "repository": "https://github.com/vihrea1337/pager",
+  "license": "MIT",
+  "keywords": ["claude-code", "claude-code-mod", "claude-code-plugin", "telegram", "notifications", "remote", "mobile"],
+  "userConfig": {
+    "botToken": {
+      "title": "Telegram bot token",
+      "description": "The token @BotFather gave you (1234567890:AA...). Kept in secure storage. You can also set it later with /pager token <token>",
+      "type": "string",
+      "sensitive": true,
+      "default": ""
+    },
+    "language": {
+      "title": "Language",
+      "description": "Language of the bot's messages",
+      "type": "string",
+      "options": ["en", "ru"],
+      "default": "en"
+    },
+    "minSeconds": {
+      "title": "Notify after (seconds)",
+      "description": "Send 'done' only for turns that took at least this long, so quick answers you watched yourself do not buzz your phone. A turn started from Telegram is always reported",
+      "type": "number",
+      "default": 30
+    },
+    "notifyPermission": {
+      "title": "Notify when waiting",
+      "description": "Send a message when Claude waits for your permission or input",
+      "type": "boolean",
+      "default": true
+    },
+    "acceptPrompts": {
+      "title": "Accept prompts from Telegram",
+      "description": "Text the bot to queue the next prompt in this session (only the paired chat is listened to)",
+      "type": "boolean",
+      "default": true
+    },
+    "desktop": {
+      "title": "Desktop notification too",
+      "description": "Also raise a system notification on this computer when a task is done",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
