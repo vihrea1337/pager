@@ -3,7 +3,7 @@
 
 export type Lang = 'en' | 'ru'
 
-/** Telegram allows 4096 characters per message; leave room for the header. */
+/** Telegram allows 4096 characters per message; one part of an answer leaves room for the header and tags. */
 export const MAX_ANSWER = 3500
 
 const WORDS = {
@@ -14,7 +14,8 @@ const WORDS = {
     refused: 'Refused',
     waiting: 'Waiting for you',
     noAnswer: '(no text answer)',
-    cut: '… (cut — /last for the whole answer)',
+    along: 'Along the way:',
+    result: 'Result:',
     queued: '📨 Queued — Claude takes it when the current task is done.',
     sent: '📨 Sent to the session.',
     pairHello: (code: string) =>
@@ -49,7 +50,8 @@ const WORDS = {
     refused: 'Отказ',
     waiting: 'Ждёт вас',
     noAnswer: '(без текстового ответа)',
-    cut: '… (обрезано — /last покажет целиком)',
+    along: 'По ходу:',
+    result: 'Итог:',
     queued: '📨 В очереди — Claude возьмётся, когда закончит текущую задачу.',
     sent: '📨 Отправлено в сессию.',
     pairHello: (code: string) =>
@@ -158,31 +160,63 @@ export function shorten(text: string, max: number): { text: string; isCut: boole
 export type TurnEnd = 'answer' | 'aborted' | 'refusal' | 'error'
 
 /**
- * The "task is done" message: folder, outcome, duration, then the answer itself. A turn a
- * background task's notification started says so instead of a duration: its length is that
- * of the short follow-up, not of the task, and read as the task's it misleads.
+ * Splits Markdown into parts of at most `max` characters at line breaks, so every part can go
+ * as its own message. A code fence open at a cut is closed there and reopened in the next part.
  */
-export function doneMessage(p: {
+export function splitMarkdown(md: string, max: number): string[] {
+  const parts: string[] = []
+  let rest = md.trim()
+  let reopen = ''
+  while (rest.length > 0) {
+    let { text } = shorten(rest, max)
+    rest = rest.slice(text.length).replace(/^\s*\n/, '')
+    text = reopen + text
+    const fences = text.match(/^```.*$/gm) ?? []
+    if (fences.length % 2 === 1 && rest.length > 0) {
+      text += '\n```'
+      reopen = `${fences[fences.length - 1]}\n`
+    } else reopen = ''
+    parts.push(text)
+  }
+  return parts.length > 0 ? parts : ['']
+}
+
+/**
+ * The "task is done" messages: folder, outcome, duration, then — when Claude wrote along the
+ * way, between tool calls — those notes, and the final answer. Nothing is cut: a long answer
+ * goes as several messages, "(2/3)" on the ones after the first.
+ *
+ * A turn a background task's notification started says so instead of a duration: its length is
+ * that of the short follow-up, not of the task, and read as the task's it misleads.
+ */
+export function doneMessages(p: {
   project: string
   reason: TurnEnd
   durationMs: number
   answer: string
   lang: Lang
+  notes?: readonly string[]
   afterTask?: boolean
   background?: number
-}): string {
+}): string[] {
   const w = words(p.lang)
   const icon = { answer: '✅', aborted: '⏹', refusal: '🚫', error: '⚠️' }[p.reason]
   const title = { answer: w.done, aborted: w.stopped, refusal: w.refused, error: w.failed }[p.reason]
   const when = p.afterTask ? w.afterTask : formatDuration(p.durationMs, p.lang)
   const header = `${icon} <b>${title}</b> · 📁 ${escapeHtml(p.project)} · ${when}\n\n`
   const footer = p.background ? w.backgroundNote(p.background) : ''
-  const body = p.answer.trim() === '' ? w.noAnswer : p.answer.trim()
-  const { text, isCut } = shorten(body, MAX_ANSWER)
-  const cut = isCut ? `\n\n<i>${escapeHtml(w.cut)}</i>` : ''
-  const rich = header + markdownToHtml(text) + cut + footer
-  // Tags count toward nothing, but an answer heavy with them can still outgrow the limit.
-  return htmlToPlain(rich).length <= TG_LIMIT ? rich : header + escapeHtml(text) + cut + footer
+  const answer = p.answer.trim() === '' ? w.noAnswer : p.answer.trim()
+  const notes = (p.notes ?? []).map((n) => n.trim()).filter((n) => n !== '' && n !== p.answer.trim())
+  const along = notes.map((n) => `- ${n.replace(/\n+/g, '\n  ')}`).join('\n')
+  const body = notes.length === 0 ? answer : `**${w.along}**\n${along}\n\n**${w.result}**\n${answer}`
+  const parts = splitMarkdown(body, MAX_ANSWER)
+  return parts.map((part, i) => {
+    const top = i === 0 ? header : `<i>(${i + 1}/${parts.length})</i>\n\n`
+    const end = i === parts.length - 1 ? footer : ''
+    const rich = top + markdownToHtml(part) + end
+    // Tags count toward nothing, but a part heavy with them can still outgrow the limit.
+    return htmlToPlain(rich).length <= TG_LIMIT ? rich : top + escapeHtml(part) + end
+  })
 }
 
 /** "Claude waits for you": permission prompts and the like, as the engine words them. */

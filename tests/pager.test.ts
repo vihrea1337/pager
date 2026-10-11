@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   classify,
-  doneMessage,
+  doneMessages,
   escapeHtml,
   formatDuration,
   htmlToPlain,
@@ -13,6 +13,7 @@ import {
   pairingCode,
   projectName,
   shorten,
+  splitMarkdown,
   statusMessage,
   type TgUpdate,
 } from '../hooks/core'
@@ -39,10 +40,10 @@ test('long answers are cut at a word, never mid-word', () => {
 })
 
 test('the done message escapes HTML and says what happened', () => {
-  const m = doneMessage({ project: 'galleria', reason: 'answer', durationMs: 75_000, answer: 'use <Box> & co', lang: 'en' })
+  const [m] = doneMessages({ project: 'galleria', reason: 'answer', durationMs: 75_000, answer: 'use <Box> & co', lang: 'en' })
   expect(m).toContain('✅ <b>Done</b> · 📁 galleria · 1 min 15 s')
   expect(m).toContain('use &lt;Box&gt; &amp; co')
-  expect(doneMessage({ project: 'p', reason: 'aborted', durationMs: 1, answer: '', lang: 'ru' })).toContain('⏹ <b>Остановлено</b>')
+  expect(doneMessages({ project: 'p', reason: 'aborted', durationMs: 1, answer: '', lang: 'ru' })[0]).toContain('⏹ <b>Остановлено</b>')
   expect(escapeHtml('a<b')).toBe('a&lt;b')
 })
 
@@ -90,7 +91,7 @@ test('Markdown answers become Telegram HTML', () => {
 })
 
 test('the done message renders Markdown and marks background work', () => {
-  const m = doneMessage({ project: 'p', reason: 'answer', durationMs: 2_000, answer: '**ok**', lang: 'en', afterTask: true, background: 1 })
+  const [m] = doneMessages({ project: 'p', reason: 'answer', durationMs: 2_000, answer: '**ok**', lang: 'en', afterTask: true, background: 1 })
   expect(m).toContain('📁 p · after a background task')
   expect(m).not.toContain('2 s')
   expect(m).toContain('<b>ok</b>')
@@ -197,4 +198,57 @@ test('pairing sets the bot menu', async ($, on) => {
   await $.command.run(run(`token ${TOKEN}`))
   const menu = world.sent.find(s => s.method === 'setMyCommands')
   expect(menu?.body.commands.map((c: any) => c.command)).toEqual(['status', 'last', 'stop', 'help'])
+})
+
+test('done lists what Claude wrote along the way, then the result', () => {
+  const [m] = doneMessages({
+    project: 'Projects',
+    reason: 'answer',
+    durationMs: 540_000,
+    answer: 'All **five** apps work.',
+    notes: ['Starting with Pager.', 'DevLog worked\non the second try.'],
+    lang: 'en',
+  })
+  expect(m).toContain('<b>Along the way:</b>\n• Starting with Pager.\n• DevLog worked\n  on the second try.')
+  expect(m).toContain('<b>Result:</b>\nAll <b>five</b> apps work.')
+})
+
+test('a long answer goes as several messages, nothing cut', () => {
+  const answer = Array.from({ length: 400 }, (_, i) => `line ${i} of a long answer`).join('\n')
+  const parts = doneMessages({ project: 'p', reason: 'answer', durationMs: 1_000, answer, lang: 'en' })
+  expect(parts.length).toBeGreaterThan(1)
+  expect(parts[1]).toContain(`<i>(2/${parts.length})</i>`)
+  expect(parts.join('\n')).toContain('line 399 of a long answer')
+  for (const part of parts) expect(part.length).toBeLessThanOrEqual(4096)
+})
+
+test('a code block cut between messages is closed and reopened', () => {
+  const md = '```ts\n' + Array.from({ length: 50 }, (_, i) => `const a${i} = ${i}`).join('\n') + '\n```'
+  const parts = splitMarkdown(md, 300)
+  expect(parts.length).toBeGreaterThan(1)
+  for (const part of parts) expect((part.match(/^```/gm) ?? []).length % 2).toBe(0)
+  expect(parts[1]?.startsWith('```ts\n')).toBe(true)
+})
+
+test('text written between tool calls reaches the done message', { options: { botToken: TOKEN } }, async ($, on) => {
+  const world = fakeWorld(on)
+  const steps = [
+    { answer: 'Looking at the emulator first.', toolUses: [{ id: 'u1', name: 'Bash', input: {} }] },
+    { answer: '', toolUses: [{ id: 'u2', name: 'Bash', input: {} }] },
+    { answer: 'Everything works.', toolUses: [] },
+  ]
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, ...steps[e.index]! } as any
+  })
+  await $.session.start({ cwd: 'C:/Projects/galleria', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'check the demo', turnId: 't1' })
+  for (let index = 0; index < steps.length; index++) {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'm', messageCount: 1 } as any)) {
+    }
+  }
+  await $.turn.complete(turn(60_000, 'Everything works.'))
+  await settle()
+  const done = world.sent.find(s => s.method === 'sendMessage')
+  expect(done?.body.text).toContain('• Looking at the emulator first.')
+  expect(done?.body.text).toContain('<b>Result:</b>\nEverything works.')
 })

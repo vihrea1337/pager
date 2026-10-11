@@ -14,16 +14,19 @@ import {
   type Lease,
   type TgUpdate,
   LEASE_MS,
+  MAX_ANSWER,
   PAIRING_TTL_MS,
   classify,
-  doneMessage,
+  doneMessages,
   escapeHtml,
   htmlToPlain,
   looksLikeToken,
+  markdownToHtml,
   mayPoll,
   pairingCode,
   projectName,
   shorten,
+  splitMarkdown,
   statusMessage,
   waitingMessage,
   words,
@@ -40,6 +43,8 @@ type Ctx = {
   sessionId: string
   project: string
   running?: { turnId: string; since: number; task: string }
+  /** What Claude wrote between tool calls this turn: shown under "Along the way" in "Done". */
+  notes: string[]
   lastAnswer: string
   /** Texts submitted from Telegram: their turns are always reported. */
   remoteTexts: Set<string>
@@ -114,9 +119,10 @@ async function setCommands($: EngineInterface, ctx: Ctx): Promise<void> {
   } catch {}
 }
 
-async function notifyPaired($: EngineInterface, ctx: Ctx, html: string): Promise<void> {
+async function notifyPaired($: EngineInterface, ctx: Ctx, html: string | readonly string[]): Promise<void> {
   const chatId = await pairedChat($)
-  if (chatId !== undefined) await send($, ctx, chatId, html)
+  if (chatId === undefined) return
+  for (const part of typeof html === 'string' ? [html] : html) await send($, ctx, chatId, part)
 }
 
 // --- polling (one session at a time holds the lease) -----------------------------------------
@@ -201,12 +207,7 @@ async function botCommand($: EngineInterface, ctx: Ctx, chatId: number, name: st
     case 'last': {
       if (ctx.lastAnswer.trim() === '') return send($, ctx, chatId, w.noLast)
       // The whole answer, in as many messages as it takes.
-      let rest = ctx.lastAnswer.trim()
-      while (rest.length > 0) {
-        const part = shorten(rest, 3900)
-        await send($, ctx, chatId, escapeHtml(part.text))
-        rest = rest.slice(part.text.length).trimStart()
-      }
+      for (const part of splitMarkdown(ctx.lastAnswer, MAX_ANSWER)) await send($, ctx, chatId, markdownToHtml(part))
       return
     }
     case 'stop': {
@@ -257,7 +258,9 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
     case 'test': {
       const chatId = await pairedChat($)
       if (chatId === undefined) return 'pager: no chat paired yet.'
-      await send($, ctx, chatId, doneMessage({ project: ctx.project, reason: 'answer', durationMs: 75_000, answer: 'Test from Pager 👋', lang: ctx.lang }))
+      for (const part of doneMessages({ project: ctx.project, reason: 'answer', durationMs: 75_000, answer: 'Test from Pager 👋', lang: ctx.lang })) {
+        await send($, ctx, chatId, part)
+      }
       return 'pager: test message sent.'
     }
     default: {
@@ -285,14 +288,14 @@ async function releaseLease($: EngineInterface, ctx: Ctx): Promise<void> {
 async function reportTurn(
   $: EngineInterface,
   ctx: Ctx,
-  turn: { reason: 'answer' | 'aborted' | 'refusal' | 'error'; durationMs: number; answer: string },
+  turn: { reason: 'answer' | 'aborted' | 'refusal' | 'error'; durationMs: number; answer: string; notes: readonly string[] },
 ): Promise<void> {
   const minMs = Math.max(0, Number(ctx.options.minSeconds ?? 0)) * 1000
   if (turn.durationMs < minMs && !ctx.remoteTurn && !ctx.taskTurn) return
   await notifyPaired(
     $,
     ctx,
-    doneMessage({ project: ctx.project, ...turn, lang: ctx.lang, afterTask: ctx.taskTurn, background: ctx.background }),
+    doneMessages({ project: ctx.project, ...turn, lang: ctx.lang, afterTask: ctx.taskTurn, background: ctx.background }),
   )
   if (ctx.options.desktop === true) {
     await $.ui.notify(shorten(turn.answer.trim() || words(ctx.lang).done, 180).text, { title: `Claude · ${ctx.project}` })
@@ -308,6 +311,7 @@ export const register: Register = (on, options) => {
     sessionId: '',
     project: '',
     lastAnswer: '',
+    notes: [],
     remoteTexts: new Set(),
     remoteTurn: false,
     taskPrompt: false,
@@ -350,7 +354,18 @@ export const register: Register = (on, options) => {
     ctx.remoteTurn = ctx.remoteTexts.delete(e.text)
     ctx.taskTurn = ctx.taskPrompt
     ctx.taskPrompt = false
+    ctx.notes = []
     return next(e)
+  })
+
+  // Text written before a tool call is not the turn's answer (turn.complete carries only the last);
+  // keep it so "Done" can show it. A subagent's steps carry its own run's id and are left out.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (result.toolUses.length > 0 && result.answer.trim() !== '' && e.turnId === ctx.running?.turnId) {
+      ctx.notes.push(result.answer)
+    }
+    return result
   })
 
   // Stop is where the engine lists background work still in flight; it runs before turn.complete's report.
@@ -364,7 +379,8 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return result // a subagent's run, not the session's turn
     ctx.running = undefined
     ctx.lastAnswer = e.answer
-    void reportTurn($, ctx, { reason: e.reason, durationMs: e.durationMs, answer: e.answer })
+    void reportTurn($, ctx, { reason: e.reason, durationMs: e.durationMs, answer: e.answer, notes: ctx.notes })
+    ctx.notes = []
     ctx.remoteTurn = false
     ctx.taskTurn = false
     return result

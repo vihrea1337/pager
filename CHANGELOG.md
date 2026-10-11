@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 — 2026-10-11
+
+- "Done" carries the whole turn: what Claude wrote along the way (between tool calls — progress notes, answers to messages sent mid-task) under "Along the way", then the final answer under "Result". Before, only the last text block arrived.
+- Nothing is cut any more: a long answer goes as several messages, "(2/3)" on the ones after the first; a code block split between messages is closed and reopened. `/last` is formatted too.
+
 ## 0.2.0 — 2026-10-11
 
 - Answers arrive formatted: Claude's Markdown (bold, italics, `code`, code blocks, headings, lists, links) becomes Telegram HTML; if Telegram still refuses the markup, the message goes out as plain text.
