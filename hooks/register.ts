@@ -18,6 +18,7 @@ import {
   classify,
   doneMessage,
   escapeHtml,
+  htmlToPlain,
   looksLikeToken,
   mayPoll,
   pairingCode,
@@ -43,6 +44,11 @@ type Ctx = {
   /** Texts submitted from Telegram: their turns are always reported. */
   remoteTexts: Set<string>
   remoteTurn: boolean
+  /** The next turn was started by a background task's notification, not by a person. */
+  taskPrompt: boolean
+  taskTurn: boolean
+  /** Background tasks still running when the last turn stopped (classic Stop's background_tasks). */
+  background: number
   pending?: { code: string; chatId: number; until: number }
   polling: boolean
   warnedToken: boolean
@@ -85,8 +91,27 @@ async function send($: EngineInterface, ctx: Ctx, chatId: number, html: string):
   try {
     await tg($, ctx, 'sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true })
   } catch (err) {
+    // 400 "can't parse entities": the same words without markup still get through.
+    if (/400/.test(String(err))) {
+      try {
+        await tg($, ctx, 'sendMessage', { chat_id: chatId, text: htmlToPlain(html).slice(0, 4096), disable_web_page_preview: true })
+        return
+      } catch (again) {
+        err = again
+      }
+    }
     $.ui.toast(`pager: ${String(err).slice(0, 120)}`)
   }
+}
+
+/** The bot's "Menu" button: the commands it answers, in the chosen language. */
+async function setCommands($: EngineInterface, ctx: Ctx): Promise<void> {
+  const c = words(ctx.lang).commands
+  try {
+    await tg($, ctx, 'setMyCommands', {
+      commands: Object.entries(c).map(([command, description]) => ({ command, description })),
+    })
+  } catch {}
 }
 
 async function notifyPaired($: EngineInterface, ctx: Ctx, html: string): Promise<void> {
@@ -165,7 +190,13 @@ async function botCommand($: EngineInterface, ctx: Ctx, chatId: number, name: st
         $,
         ctx,
         chatId,
-        statusMessage({ runningSinceMs: ctx.running?.since, nowMs: await $.clock.now(), task: ctx.running?.task, lang: ctx.lang }),
+        statusMessage({
+          runningSinceMs: ctx.running?.since,
+          nowMs: await $.clock.now(),
+          task: ctx.running?.task,
+          background: ctx.running ? undefined : ctx.background,
+          lang: ctx.lang,
+        }),
       )
     case 'last': {
       if (ctx.lastAnswer.trim() === '') return send($, ctx, chatId, w.noLast)
@@ -204,6 +235,7 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
       ctx.warnedToken = false
       try {
         const me = await tg($, ctx, 'getMe', {})
+        await setCommands($, ctx)
         return `pager: token saved — bot @${me?.username}. Now text the bot anything; it answers with a code for /pager pair <code>.`
       } catch (err) {
         return `pager: token saved, but Telegram refused it: ${String(err)}`
@@ -215,6 +247,7 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
       if (arg !== ctx.pending.code) return 'pager: wrong code.'
       await $.store.set('chatId', ctx.pending.chatId)
       await send($, ctx, ctx.pending.chatId, w.paired)
+      await setCommands($, ctx)
       ctx.pending = undefined
       return 'pager: paired — notifications go to that chat, and only it can send prompts.'
     }
@@ -236,7 +269,7 @@ async function pagerCommand($: EngineInterface, ctx: Ctx, args: string): Promise
         `pager: token ${token ? 'set' : 'missing — /pager token <token>'}`,
         `chat ${chatId !== undefined ? 'paired' : 'not paired — text the bot, then /pager pair <code>'}`,
         `listening ${where}`,
-        `notify after ${Number(ctx.options.minSeconds ?? 30)} s · language ${ctx.lang}`,
+        `notify after ${Number(ctx.options.minSeconds ?? 0)} s · language ${ctx.lang}`,
       ].join('\n')
     }
   }
@@ -254,9 +287,13 @@ async function reportTurn(
   ctx: Ctx,
   turn: { reason: 'answer' | 'aborted' | 'refusal' | 'error'; durationMs: number; answer: string },
 ): Promise<void> {
-  const minMs = Math.max(0, Number(ctx.options.minSeconds ?? 30)) * 1000
-  if (turn.durationMs < minMs && !ctx.remoteTurn) return
-  await notifyPaired($, ctx, doneMessage({ project: ctx.project, ...turn, lang: ctx.lang }))
+  const minMs = Math.max(0, Number(ctx.options.minSeconds ?? 0)) * 1000
+  if (turn.durationMs < minMs && !ctx.remoteTurn && !ctx.taskTurn) return
+  await notifyPaired(
+    $,
+    ctx,
+    doneMessage({ project: ctx.project, ...turn, lang: ctx.lang, afterTask: ctx.taskTurn, background: ctx.background }),
+  )
   if (ctx.options.desktop === true) {
     await $.ui.notify(shorten(turn.answer.trim() || words(ctx.lang).done, 180).text, { title: `Claude · ${ctx.project}` })
   }
@@ -273,6 +310,9 @@ export const register: Register = (on, options) => {
     lastAnswer: '',
     remoteTexts: new Set(),
     remoteTurn: false,
+    taskPrompt: false,
+    taskTurn: false,
+    background: 0,
     polling: false,
     warnedToken: false,
   }
@@ -288,6 +328,7 @@ export const register: Register = (on, options) => {
     if (e.isInteractive && options.acceptPrompts !== false) {
       // One period = one long-poll at most; ctx.polling keeps them from overlapping.
       $.clock.every(1500, () => void poll($, ctx))
+      void setCommands($, ctx)
     }
     return next(e)
   })
@@ -298,11 +339,25 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('prompt.submit', ($, e, next) => {
+    // Only an idle session's notification starts a turn of its own; one delivered into a running turn does not.
+    if (e.origin.kind === 'task-notification' && e.turnId === undefined) ctx.taskPrompt = true
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('turn.start', ($, e, next) => {
     ctx.running = { turnId: e.turnId, since: Date.now(), task: e.text }
     ctx.remoteTurn = ctx.remoteTexts.delete(e.text)
+    ctx.taskTurn = ctx.taskPrompt
+    ctx.taskPrompt = false
     return next(e)
   })
+
+  // Stop is where the engine lists background work still in flight; it runs before turn.complete's report.
+  on('classic.Stop', ($, e, next) => {
+    ctx.background = e.background_tasks?.length ?? 0
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
@@ -311,6 +366,7 @@ export const register: Register = (on, options) => {
     ctx.lastAnswer = e.answer
     void reportTurn($, ctx, { reason: e.reason, durationMs: e.durationMs, answer: e.answer })
     ctx.remoteTurn = false
+    ctx.taskTurn = false
     return result
   })
 

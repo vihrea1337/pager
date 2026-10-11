@@ -21,6 +21,9 @@ const WORDS = {
       `👋 To link this chat, type in Claude Code:\n<code>/pager pair ${code}</code>\n\nThe code works for 10 minutes.`,
     paired: '✅ Paired. Text me the next prompt, or /help.',
     idle: '💤 Idle — waiting for a prompt.',
+    idleBackground: (n: number) => `💤 Idle · ${n} background task${n === 1 ? '' : 's'} running — Claude picks up when ${n === 1 ? 'it ends' : 'they end'}.`,
+    backgroundNote: (n: number) => `\n\n<i>+ ${n} background task${n === 1 ? '' : 's'} running</i>`,
+    afterTask: 'after a background task',
     working: (s: string, task: string) => `⏳ Working for ${s} on:\n<i>${task}</i>`,
     nothingToStop: 'Nothing is running.',
     stoppedTurn: '⏹ Stopped the running task.',
@@ -34,6 +37,7 @@ const WORDS = {
       '/stop — stop the running task\n' +
       '/help — this message',
     unknown: (c: string) => `Unknown command /${c} — /help`,
+    commands: { status: 'What Claude is doing', last: 'The last answer in full', stop: 'Stop the running task', help: 'How this bot works' },
     sec: 's',
     min: 'min',
     h: 'h',
@@ -52,6 +56,9 @@ const WORDS = {
       `👋 Чтобы привязать этот чат, введите в Claude Code:\n<code>/pager pair ${code}</code>\n\nКод действует 10 минут.`,
     paired: '✅ Привязано. Пишите следующий запрос или /help.',
     idle: '💤 Свободен — ждёт запроса.',
+    idleBackground: (n: number) => `💤 Ход закончен · фоновых задач: ${n} — Claude продолжит, когда ${n === 1 ? 'она завершится' : 'они завершатся'}.`,
+    backgroundNote: (n: number) => `\n\n<i>+ фоновых задач: ${n}</i>`,
+    afterTask: 'после фоновой задачи',
     working: (s: string, task: string) => `⏳ Работает ${s} над:\n<i>${task}</i>`,
     nothingToStop: 'Сейчас ничего не выполняется.',
     stoppedTurn: '⏹ Текущая задача остановлена.',
@@ -65,6 +72,7 @@ const WORDS = {
       '/stop — остановить текущую задачу\n' +
       '/help — это сообщение',
     unknown: (c: string) => `Неизвестная команда /${c} — /help`,
+    commands: { status: 'Чем занят Claude', last: 'Последний ответ целиком', stop: 'Остановить текущую задачу', help: 'Как пользоваться ботом' },
     sec: 'с',
     min: 'мин',
     h: 'ч',
@@ -75,6 +83,59 @@ export const words = (lang: Lang) => WORDS[lang] ?? WORDS.en
 
 /** Telegram's HTML mode needs only these three escaped. */
 export const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** Telegram's limit for one message, after entities are parsed. */
+export const TG_LIMIT = 4096
+
+/**
+ * Claude answers in Markdown; Telegram's HTML mode shows only a handful of tags. Fenced code →
+ * <pre>, `code` → <code>, **bold** / # headings → <b>, *italic* / _italic_ → <i>, ~~x~~ → <s>,
+ * [text](url) → <a>. Everything else is escaped text, so the result always parses.
+ */
+export function markdownToHtml(md: string): string {
+  const out: string[] = []
+  // Split off fenced blocks first: nothing inside them is Markdown.
+  const fence = /^```[^\n]*\n([\s\S]*?)^```[ \t]*$/gm
+  let last = 0
+  for (let m = fence.exec(md); m !== null; m = fence.exec(md)) {
+    out.push(inlineMarkdown(md.slice(last, m.index)))
+    out.push(`<pre>${escapeHtml((m[1] ?? '').replace(/\n$/, ''))}</pre>`)
+    last = m.index + m[0].length
+  }
+  out.push(inlineMarkdown(md.slice(last)))
+  return out.join('')
+}
+
+function inlineMarkdown(text: string): string {
+  // Inline code is cut out before escaping and emphasis, then put back.
+  const codes: string[] = []
+  const held = text.replace(/`([^`\n]+)`/g, (_, c: string) => `\u0000${codes.push(c) - 1}\u0000`)
+  const lines = escapeHtml(held)
+    .split('\n')
+    .map((line) => {
+      const heading = /^#{1,6}\s+(.+?)\s*#*$/.exec(line)
+      if (heading) return `<b>${heading[1]}</b>`
+      return line.replace(/^(\s*)[*-]\s+/, '$1• ')
+    })
+    .join('\n')
+  return lines
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t: string, u: string) => `<a href="${u.replace(/"/g, '&quot;')}">${t}</a>`)
+    .replace(/\*\*(?=\S)([^*\n]+?)\*\*/g, '<b>$1</b>')
+    .replace(/__(?=\S)([^_\n]+?)__/g, '<b>$1</b>')
+    .replace(/~~(?=\S)([^~\n]+?)~~/g, '<s>$1</s>')
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]+?)\*(?![\w*])/g, '$1<i>$2</i>')
+    .replace(/(^|[^\w])_(?=\S)([^_\n]+?)_(?!\w)/g, '$1<i>$2</i>')
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => `<code>${escapeHtml(codes[Number(i)] ?? '')}</code>`)
+}
+
+/** The same message without tags: the fallback when Telegram refuses the HTML. */
+export const htmlToPlain = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
 
 /** 42 s · 3 min 05 s · 1 h 12 min */
 export function formatDuration(ms: number, lang: Lang): string {
@@ -96,18 +157,32 @@ export function shorten(text: string, max: number): { text: string; isCut: boole
 
 export type TurnEnd = 'answer' | 'aborted' | 'refusal' | 'error'
 
-/** The "task is done" message: folder, outcome, duration, then the answer itself. */
-export function doneMessage(p: { project: string; reason: TurnEnd; durationMs: number; answer: string; lang: Lang }): string {
+/**
+ * The "task is done" message: folder, outcome, duration, then the answer itself. A turn a
+ * background task's notification started says so instead of a duration: its length is that
+ * of the short follow-up, not of the task, and read as the task's it misleads.
+ */
+export function doneMessage(p: {
+  project: string
+  reason: TurnEnd
+  durationMs: number
+  answer: string
+  lang: Lang
+  afterTask?: boolean
+  background?: number
+}): string {
   const w = words(p.lang)
   const icon = { answer: '✅', aborted: '⏹', refusal: '🚫', error: '⚠️' }[p.reason]
   const title = { answer: w.done, aborted: w.stopped, refusal: w.refused, error: w.failed }[p.reason]
+  const when = p.afterTask ? w.afterTask : formatDuration(p.durationMs, p.lang)
+  const header = `${icon} <b>${title}</b> · 📁 ${escapeHtml(p.project)} · ${when}\n\n`
+  const footer = p.background ? w.backgroundNote(p.background) : ''
   const body = p.answer.trim() === '' ? w.noAnswer : p.answer.trim()
   const { text, isCut } = shorten(body, MAX_ANSWER)
-  return (
-    `${icon} <b>${title}</b> · 📁 ${escapeHtml(p.project)} · ${formatDuration(p.durationMs, p.lang)}\n\n` +
-    escapeHtml(text) +
-    (isCut ? `\n\n<i>${escapeHtml(w.cut)}</i>` : '')
-  )
+  const cut = isCut ? `\n\n<i>${escapeHtml(w.cut)}</i>` : ''
+  const rich = header + markdownToHtml(text) + cut + footer
+  // Tags count toward nothing, but an answer heavy with them can still outgrow the limit.
+  return htmlToPlain(rich).length <= TG_LIMIT ? rich : header + escapeHtml(text) + cut + footer
 }
 
 /** "Claude waits for you": permission prompts and the like, as the engine words them. */
@@ -115,12 +190,13 @@ export function waitingMessage(p: { project: string; message: string; lang: Lang
   return `⏸ <b>${words(p.lang).waiting}</b> · 📁 ${escapeHtml(p.project)}\n\n${escapeHtml(p.message)}`
 }
 
-/** The answer to /status. */
-export function statusMessage(p: { runningSinceMs?: number; nowMs: number; task?: string; lang: Lang }): string {
+/** The answer to /status: the running turn, or idle — with the background tasks still at work. */
+export function statusMessage(p: { runningSinceMs?: number; nowMs: number; task?: string; background?: number; lang: Lang }): string {
   const w = words(p.lang)
-  if (p.runningSinceMs === undefined) return w.idle
+  const background = p.background ?? 0
+  if (p.runningSinceMs === undefined) return background > 0 ? w.idleBackground(background) : w.idle
   const task = shorten(p.task ?? '', 300).text
-  return w.working(formatDuration(p.nowMs - p.runningSinceMs, p.lang), escapeHtml(task))
+  return w.working(formatDuration(p.nowMs - p.runningSinceMs, p.lang), escapeHtml(task)) + (background > 0 ? w.backgroundNote(background) : '')
 }
 
 /** The parts of a Telegram update Pager reads (getUpdates → result[i]). */

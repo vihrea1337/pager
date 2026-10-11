@@ -1,6 +1,6 @@
 {
   "name": "pager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pager: Claude Code pings you in Telegram when a task is done or it waits for your permission, and you text back the next prompt, /status, /last or /stop from your phone",
   "author": {
     "name": "vihrea1337",
@@ -29,7 +29,7 @@
       "title": "Notify after (seconds)",
       "description": "Send 'done' only for turns that took at least this long, so quick answers you watched yourself do not buzz your phone. A turn started from Telegram is always reported",
       "type": "number",
-      "default": 30
+      "default": 0
     },
     "notifyPermission": {
       "title": "Notify when waiting",

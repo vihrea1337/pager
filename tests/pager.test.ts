@@ -6,7 +6,9 @@ import {
   doneMessage,
   escapeHtml,
   formatDuration,
+  htmlToPlain,
   looksLikeToken,
+  markdownToHtml,
   mayPoll,
   pairingCode,
   projectName,
@@ -73,6 +75,31 @@ test('small helpers', () => {
   expect(projectName('C:\\Users\\user\\Desktop\\Projects\\galleria')).toBe('galleria')
   expect(statusMessage({ nowMs: 0, lang: 'en' })).toContain('Idle')
   expect(statusMessage({ runningSinceMs: 0, nowMs: 90_000, task: 'build <it>', lang: 'en' })).toContain('1 min 30 s on:\n<i>build &lt;it&gt;</i>')
+})
+
+test('Markdown answers become Telegram HTML', () => {
+  expect(markdownToHtml('**Done**: fixed `a<b` in *core.ts*')).toBe('<b>Done</b>: fixed <code>a&lt;b</code> in <i>core.ts</i>')
+  expect(markdownToHtml('## Result\n- one\n- two')).toBe('<b>Result</b>\n• one\n• two')
+  expect(markdownToHtml('```ts\nconst x = a && b\n```')).toBe('<pre>const x = a &amp;&amp; b</pre>')
+  expect(markdownToHtml('[docs](https://core.telegram.org/bots/api)')).toBe('<a href="https://core.telegram.org/bots/api">docs</a>')
+  // Not emphasis: snake_case, a lone star, 2 * 3 * 4.
+  expect(markdownToHtml('my_var_name and 2 * 3 * 4')).toBe('my_var_name and 2 * 3 * 4')
+  // An unclosed fence stays text, so the message still parses.
+  expect(markdownToHtml('```\nhalf')).toBe('```\nhalf')
+  expect(htmlToPlain('<b>a &lt; b</b>')).toBe('a < b')
+})
+
+test('the done message renders Markdown and marks background work', () => {
+  const m = doneMessage({ project: 'p', reason: 'answer', durationMs: 2_000, answer: '**ok**', lang: 'en', afterTask: true, background: 1 })
+  expect(m).toContain('📁 p · after a background task')
+  expect(m).not.toContain('2 s')
+  expect(m).toContain('<b>ok</b>')
+  expect(m).toContain('+ 1 background task running')
+})
+
+test('/status counts background tasks while idle', () => {
+  expect(statusMessage({ nowMs: 0, background: 2, lang: 'en' })).toContain('2 background tasks running')
+  expect(statusMessage({ nowMs: 0, background: 1, lang: 'ru' })).toContain('фоновых задач: 1')
 })
 
 // --- the hooks, against a fake Telegram and a store in memory --------------------------------
@@ -150,4 +177,24 @@ test('/pager token checks the token with Telegram and keeps it', async ($, on) =
   const { text } = await $.command.run(run(`token ${TOKEN}`))
   expect(text).toContain('@test_bot')
   expect(world.store.get('token')).toBe(TOKEN)
+})
+
+test('a turn a background task started is reported, without a misleading duration', { options: { botToken: TOKEN, minSeconds: 30 } }, async ($, on) => {
+  const world = fakeWorld(on)
+  await $.session.start({ cwd: 'C:/Projects/galleria', surface: null, isInteractive: false })
+  await $.prompt.submit({ text: '<task-notification>sleep 40 done</task-notification>', wait: false, origin: { kind: 'task-notification' } })
+  await $.turn.start({ text: '<task-notification>sleep 40 done</task-notification>', turnId: 't1' })
+  await $.turn.complete(turn(2_000, 'The timer finished.'))
+  await settle()
+  const done = world.sent.find(s => s.method === 'sendMessage')
+  expect(done?.body.text).toContain('after a background task')
+  expect(done?.body.text).toContain('The timer finished.')
+})
+
+test('pairing sets the bot menu', async ($, on) => {
+  const world = fakeWorld(on)
+  await $.session.start({ cwd: 'C:/Projects/galleria', surface: null, isInteractive: false })
+  await $.command.run(run(`token ${TOKEN}`))
+  const menu = world.sent.find(s => s.method === 'setMyCommands')
+  expect(menu?.body.commands.map((c: any) => c.command)).toEqual(['status', 'last', 'stop', 'help'])
 })

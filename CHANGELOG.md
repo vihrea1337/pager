@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0 — 2026-10-11
+
+- Answers arrive formatted: Claude's Markdown (bold, italics, `code`, code blocks, headings, lists, links) becomes Telegram HTML; if Telegram still refuses the markup, the message goes out as plain text.
+- The bot's "Menu" button lists /status, /last, /stop, /help (set on start, `/pager token` and pairing).
+- `/status` says when the turn is over but background tasks are still running; "Done" notes them too.
+- A turn started by a background task's notification is marked "after a background task" instead of showing its own few seconds as if they were the task's.
+- "Done" is sent for every turn by default (`minSeconds` 0).
+
 ## 0.1.0 — 2026-10-11
 
 First version.
